@@ -605,9 +605,7 @@ def merge(outdir, suffix, deriv_file, variable, data_dict_dir, coins_dir):
 
     df_pheno = df_pheno.filter(items=subjects, axis="index")
     df_pheno.index.rename("subjectID", inplace=True)
-    df_pheno.to_csv(
-        op.join(outdir, "pheno" + suffix + ".csv")
-    )
+    df_pheno.to_csv(op.join(outdir, "pheno" + suffix + ".csv"))
 
 
 if __name__ == "__main__":

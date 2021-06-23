@@ -1,8 +1,10 @@
 """A simple command line tool to interact with phenotypic data from the Healthy Brain Network."""
-from setuptools import setup
-import string
+import datetime
+import os
 import os.path as op
-import glob
+import string
+
+from setuptools import setup
 from setuptools_scm import get_version
 
 
@@ -21,15 +23,18 @@ def local_version(version):
         return ""
 
 
-opts = dict(
-    use_scm_version={
-        "root": ".",
-        "relative_to": __file__,
-        "write_to": op.join("coinsparse", "_version.py"),
-        "local_scheme": local_version,
-    },
-    scripts=[op.join("bin", op.split(f)[-1]) for f in glob.glob("bin/*")],
-)
+# Allow installation without git repository, e.g. inside Docker.
+if os.path.exists(".git"):
+    opts = dict(
+        use_scm_version={
+            "root": ".",
+            "relative_to": __file__,
+            "write_to": op.join("coinsparse", "_version.py"),
+            "local_scheme": local_version,
+        },
+    )
+else:
+    opts = dict(version="0+d" + datetime.date.today().strftime("%Y%m%d"))
 
 
 if __name__ == "__main__":
