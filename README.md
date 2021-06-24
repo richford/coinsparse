@@ -38,7 +38,7 @@ without the ellipses.
 
 For example, to summarize only the "FSQ" and "WIAT" assessments, with data dictionaries located in the `data/data_dictionaries_coins` directory and phenotypic data located in the `data/coins_assessment_data_20210329` directory, and computing the intersection of subjects with tractometry data data located in `data/combined_tract_profiles.csv`, you would use the command
 ```bash
-docker compose run coinsparse summarize -a FSQ -a WIAT --deriv_file data/combined_tract_profiles.csv --deriv_name tractometry data/data_dictionaries_coins data/coins_assessment_data_20210329
+docker compose run coinsparse summarize -a FSQ -a WIAT --deriv-file data/combined_tract_profiles.csv --deriv-name tractometry data/data_dictionaries_coins data/coins_assessment_data_20210329
 ```
 
 Or to list all of the subjects with the aforesaid tractometry data and responses to the "FSQ_08" and "WIAT_RC_Stnd" variables, you would use the command
