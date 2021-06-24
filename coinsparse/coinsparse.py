@@ -20,9 +20,14 @@ def _get_coins_path(coins_basename, coins_dir):
         ]
     )
     coins_regex = re.compile(fnmatch.translate(coins_pattern), re.IGNORECASE)
-    return [
+    coins_matches = [
         op.join(coins_dir, fn) for fn in os.listdir(coins_dir) if coins_regex.match(fn)
-    ][0]
+    ]
+
+    if coins_matches:
+        return coins_matches[0]
+    else:
+        return None
 
 
 def parse_single_xlsx(
@@ -31,6 +36,7 @@ def parse_single_xlsx(
     derivative_subjects=None,
     derivative_name=None,
     count_subs=True,
+    suppress_warnings=False,
 ):
     """
     Parameters
@@ -51,6 +57,9 @@ def parse_single_xlsx(
     count_subs : bool, default=True
         If True, count the number of non-null responses for each variable and,
         optionally, the number of those subjects with derivative data.
+
+    suppress_warnings : bool, default=False
+        If True, do not echo warnings for missing COINS files
     """
     assessment = pd.read_excel(data_dict_filename, engine="openpyxl", header=0).columns[
         0
@@ -145,6 +154,19 @@ def parse_single_xlsx(
     coins_filename = pd.unique(df["COINS Filename"])[0]
     coins_path = _get_coins_path(coins_filename, coins_dir)
 
+    if coins_path is None:
+        if not suppress_warnings:
+            click.echo(
+                f"Warning: missing COINS data file for assessment {coins_filename}. "
+                "Skipping the subject count for this assessment. To suppress this "
+                "warning, use option --suppress-warnings."
+            )
+        if count_subs:
+            df["non-na count"] = np.nan
+            if derivative_subjects is not None:
+                df["with " + derivative_name] = np.nan
+        return df
+
     if count_subs:
         try:
             response_df = (
@@ -192,6 +214,7 @@ def create_hbn_summary(
     derivatives_file=None,
     derivative_name=None,
     count_subs=True,
+    suppress_warnings=False,
 ):
     """
     Parameters
@@ -215,6 +238,9 @@ def create_hbn_summary(
     count_subs : bool, default=True
         If True, count the number of non-null responses for each variable and,
         optionally, the number of those subjects with derivative data.
+
+    suppress_warnings : bool, default=False
+        If True, do not echo warnings for missing COINS files
     """
     data_dict_files = glob(op.join(data_dict_dir, "*.xlsx"))
     data_dict_files = [fn for fn in data_dict_files if "~$" not in fn and " " not in fn]
@@ -258,6 +284,7 @@ def create_hbn_summary(
                 derivative_subjects=derivatives_subs,
                 derivative_name=deriv_name,
                 count_subs=count_subs,
+                suppress_warnings=suppress_warnings,
             )
             for fn in tqdm(data_dict_files)
         ]
@@ -280,7 +307,10 @@ def _get_variable_info(variable, data_dict_dir, coins_dir, return_df=False):
         # this will suppress all warnings in this block
         warnings.simplefilter("ignore", category=UserWarning)
         df_data_dict = create_hbn_summary(
-            data_dict_dir=data_dict_dir, coins_dir=coins_dir, count_subs=False
+            data_dict_dir=data_dict_dir,
+            coins_dir=coins_dir,
+            count_subs=False,
+            suppress_warnings=True,
         )
 
     # Confirm that the requested variables actually exist in COINS
@@ -308,6 +338,12 @@ def _get_variable_info(variable, data_dict_dir, coins_dir, return_df=False):
     # Iterate through the COINS files
     for coins_file in pd.unique(df_data_dict["COINS Filename"]):
         coins_path = _get_coins_path(coins_file, coins_dir)
+
+        if coins_path is None:
+            raise click.ClickException(
+                f"Missing COINS data file for assessment {coins_file}."
+            )
+
         subject_col = "EID"
         try:
             response_df = (
@@ -395,9 +431,24 @@ def cli():
     type=str,
     default=None,
 )
+@click.option(
+    "--suppress-warnings",
+    help="Suppress warnings for missing COINS files.",
+    is_flag=True,
+    flag_value=True,
+    type=bool,
+)
 @click.argument("data_dict_dir", type=str)
 @click.argument("coins_dir", type=str)
-def summarize(output, assessment, deriv_file, deriv_name, data_dict_dir, coins_dir):
+def summarize(
+    output,
+    assessment,
+    deriv_file,
+    deriv_name,
+    suppress_warnings,
+    data_dict_dir,
+    coins_dir,
+):
     """Create a csv file containing summary information on HBN phenotypical assessments.
 
     This software assumes that the data dictionaries and phenotypic files are in the
@@ -426,6 +477,7 @@ def summarize(output, assessment, deriv_file, deriv_name, data_dict_dir, coins_d
             assessments=assessment_arg,
             derivatives_file=deriv_file,
             derivative_name=deriv_name,
+            suppress_warnings=suppress_warnings,
         )
 
     df.to_csv(output)
