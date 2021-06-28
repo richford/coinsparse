@@ -213,6 +213,9 @@ def create_hbn_summary(
     assessments=None,
     derivatives_file=None,
     derivative_name=None,
+    qc_file=None,
+    qc_threshold=-np.inf,
+    qc_column_name=None,
     count_subs=True,
     suppress_warnings=False,
 ):
@@ -234,6 +237,17 @@ def create_hbn_summary(
 
     derivative_name : str, optional
         The name of the derivative data with which to intersect the phenotypical responses
+
+    qc_file : str, optional
+        Path to a csv file containing qc metrics for each subject. If supplied,
+        this function exclude subject below the QC threshold specified by
+        `qc_threshold`.
+
+    qc_threshold : float, optional
+        QC threshold with which to exclude subjects
+
+    qc_column_name : str, optional
+        Name of the column in the QC file that contains the QC ratings
 
     count_subs : bool, default=True
         If True, count the number of non-null responses for each variable and,
@@ -266,14 +280,24 @@ def create_hbn_summary(
 
     deriv_name = derivative_name
 
+    if qc_file is not None:
+        df_qc = pd.read_csv(qc_file, usecols=["subjectID", qc_column_name])
+        df_qc = df_qc[df_qc[qc_column_name] >= qc_threshold]
+        qc_subs = set(df_qc["subjectID"])
+    else:
+        qc_subs = None
+
     if derivatives_file is not None:
         derivatives_subs = set(
             pd.unique(pd.read_csv(derivatives_file, usecols=["subjectID"])["subjectID"])
         )
         if derivative_name is None:
             deriv_name = "derivative"
+
+        if qc_file is not None:
+            derivatives_subs = derivatives_subs.intersection(qc_subs)
     else:
-        derivatives_subs = None
+        derivatives_subs = qc_subs
         deriv_name = None
 
     df_summary = pd.concat(
@@ -325,6 +349,30 @@ def _get_variable_info(variable, data_dict_dir, coins_dir, return_df=False):
     # Keep only the variables requested by the user
     var_mask = df_data_dict["Variable Name"].isin(variable)
     df_data_dict = df_data_dict[var_mask]
+
+    dup_mask = df_data_dict.duplicated(subset="Variable Name", keep=False)
+    if dup_mask.sum():
+        df_dups = df_data_dict[dup_mask]
+        assessment_map = {
+            var: df_dups[df_dups["Variable Name"] == var]["COINS Filename"].to_list()
+            for var in pd.unique(df_dups["Variable Name"])
+        }
+        for var in assessment_map.keys():
+            use_this = click.prompt(
+                f"There are multiple assessments with the variable {var}. "
+                "Please choice as assessment to use from the list below.",
+                type=click.Choice(assessment_map[var]),
+            )
+            assessment_map[var] = use_this
+
+            df_data_dict = df_data_dict[
+                np.logical_not(
+                    np.logical_and(
+                        df_data_dict["Variable Name"] == var,
+                        df_data_dict["COINS Filename"] != use_this,
+                    )
+                )
+            ]
 
     # We will store sets of subject IDs in a list
     # Each element will be a set of subject IDs that are present for a variable
@@ -438,6 +486,24 @@ def cli():
     flag_value=True,
     type=bool,
 )
+@click.option(
+    "--qc-file",
+    help="Path to a csv file containing qc metrics for each subject.",
+    type=str,
+    default=None,
+)
+@click.option(
+    "--qc-threshold",
+    help="QC threshold with which to exclude subjects",
+    type=float,
+    default=-np.inf,
+)
+@click.option(
+    "--qc-column-name",
+    help="Name of the column in the QC file that contains the QC ratings",
+    type=str,
+    default="qc",
+)
 @click.argument("data_dict_dir", type=str)
 @click.argument("coins_dir", type=str)
 def summarize(
@@ -446,6 +512,9 @@ def summarize(
     deriv_file,
     deriv_name,
     suppress_warnings,
+    qc_file,
+    qc_threshold,
+    qc_column_name,
     data_dict_dir,
     coins_dir,
 ):
@@ -477,6 +546,9 @@ def summarize(
             assessments=assessment_arg,
             derivatives_file=deriv_file,
             derivative_name=deriv_name,
+            qc_file=qc_file,
+            qc_threshold=qc_threshold,
+            qc_column_name=qc_column_name,
             suppress_warnings=suppress_warnings,
         )
 
@@ -511,6 +583,28 @@ def summarize(
     ),
 )
 @click.option(
+    "--qc-file",
+    help=(
+        "Path to a csv file containing qc metrics for each subject. This file "
+        "must have a 'subjectID' column and a QC rating columns specified by "
+        "`qc_column_name`."
+    ),
+    type=str,
+    default=None,
+)
+@click.option(
+    "--qc-threshold",
+    help="QC threshold with which to exclude subjects",
+    type=float,
+    default=-np.inf,
+)
+@click.option(
+    "--qc-column-name",
+    help="Name of the column in the QC file that contains the QC ratings",
+    type=str,
+    default="qc",
+)
+@click.option(
     "-o",
     "--output",
     type=click.File("w"),
@@ -519,7 +613,16 @@ def summarize(
 )
 @click.argument("data_dict_dir", type=str)
 @click.argument("coins_dir", type=str)
-def list_subjects(deriv_file, variable, output, data_dict_dir, coins_dir):
+def list_subjects(
+    deriv_file,
+    variable,
+    qc_file,
+    qc_threshold,
+    qc_column_name,
+    output,
+    data_dict_dir,
+    coins_dir,
+):
     """Return the list of subjects who have BOTH valid responses to certain variables AND derivative data.
 
     This software assumes that the data dictionaries and phenotypic files are in the
@@ -557,12 +660,20 @@ def list_subjects(deriv_file, variable, output, data_dict_dir, coins_dir):
     if deriv_subs:
         deriv_subs = set.intersection(*deriv_subs)
         if variable:
-            subjects = list(pheno_subs.intersection(deriv_subs))
+            subjects = pheno_subs.intersection(deriv_subs)
         else:
-            subjects = list(deriv_subs)
+            subjects = deriv_subs
     else:
-        subjects = list(pheno_subs)
+        subjects = pheno_subs
 
+    if qc_file is not None:
+        df_qc = pd.read_csv(qc_file, usecols=["subjectID", qc_column_name])
+        df_qc = df_qc[df_qc[qc_column_name] >= qc_threshold]
+        qc_subs = set(df_qc["subjectID"])
+
+        subjects.intersection_update(qc_subs)
+
+    subjects = list(subjects)
     click.echo("\n".join(subjects), file=output)
     return subjects
 
@@ -597,9 +708,41 @@ def list_subjects(deriv_file, variable, output, data_dict_dir, coins_dir):
         "option multiple times. e.g '-v FSQ_08 -v WIAT_RC_Stnd'."
     ),
 )
+@click.option(
+    "--qc-file",
+    help=(
+        "Path to a csv file containing qc metrics for each subject. This file "
+        "must have a 'subjectID' column and a QC rating columns specified by "
+        "`qc_column_name`."
+    ),
+    type=str,
+    default=None,
+)
+@click.option(
+    "--qc-threshold",
+    help="QC threshold with which to exclude subjects",
+    type=float,
+    default=-np.inf,
+)
+@click.option(
+    "--qc-column-name",
+    help="Name of the column in the QC file that contains the QC ratings",
+    type=str,
+    default="qc",
+)
 @click.argument("data_dict_dir", type=str)
 @click.argument("coins_dir", type=str)
-def merge(outdir, suffix, deriv_file, variable, data_dict_dir, coins_dir):
+def merge(
+    outdir,
+    suffix,
+    deriv_file,
+    variable,
+    qc_file,
+    qc_threshold,
+    qc_column_name,
+    data_dict_dir,
+    coins_dir,
+):
     """Create subset versions of phenotypic and derivative data files.
 
     This utility will find all subjects that have BOTH phenotypic data for the
@@ -641,11 +784,20 @@ def merge(outdir, suffix, deriv_file, variable, data_dict_dir, coins_dir):
     if deriv_subs:
         deriv_subs = set.intersection(*deriv_subs)
         if variable:
-            subjects = list(pheno_subs.intersection(deriv_subs))
+            subjects = pheno_subs.intersection(deriv_subs)
         else:
-            subjects = list(deriv_subs)
+            subjects = deriv_subs
     else:
-        subjects = list(pheno_subs)
+        subjects = pheno_subs
+
+    if qc_file is not None:
+        df_qc = pd.read_csv(qc_file, usecols=["subjectID", qc_column_name])
+        df_qc = df_qc[df_qc[qc_column_name] >= qc_threshold]
+        qc_subs = set(df_qc["subjectID"])
+
+        subjects.intersection_update(qc_subs)
+
+    subjects = list(subjects)
 
     os.makedirs(outdir, exist_ok=True)
 
@@ -655,9 +807,16 @@ def merge(outdir, suffix, deriv_file, variable, data_dict_dir, coins_dir):
             op.join(outdir, suffix.join(op.splitext(op.basename(dfile))))
         )
 
-    df_pheno = df_pheno.filter(items=subjects, axis="index")
-    df_pheno.index.rename("subjectID", inplace=True)
-    df_pheno.to_csv(op.join(outdir, "pheno" + suffix + ".csv"))
+    if variable:
+        df_pheno = df_pheno.filter(items=subjects, axis="index")
+        df_pheno.index.rename("subjectID", inplace=True)
+        df_pheno.to_csv(op.join(outdir, "pheno" + suffix + ".csv"))
+
+    if qc_file is not None:
+        df_qc = pd.read_csv(qc_file)
+        df_qc = df_qc[df_qc["subjectID"].isin(subjects)]
+        df_qc.set_index("subjectID", drop=True, inplace=True)
+        df_qc.to_csv(op.join(outdir, suffix.join(op.splitext(op.basename(qc_file)))))
 
 
 if __name__ == "__main__":
